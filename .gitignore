@@ -1,0 +1,23 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Audio files — likely contain personal recordings
+*.wav
+*.mp3
+*.m4a
+*.flac
+*.ogg
+*.opus
+
+# Transcription outputs
+output.txt
+*.transcript.txt
+
+# Model cache — downloaded automatically, no need to commit (can be several GB)
+~/.cache/huggingface/

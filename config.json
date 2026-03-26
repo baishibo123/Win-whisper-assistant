@@ -1,0 +1,11 @@
+{
+    "model": "large-v3",
+    "device": "cuda",
+    "compute_type": "float16",
+    "language": null,
+    "beam_size": 5,
+    "initial_prompt": "Claude, Anthropic, WSL, GPU, Python, GitHub",
+    "server_port": 8765,
+    "audio_device_name": "麦克风 (thinkplus meeting dock)",
+    "vad_filter": true
+}
