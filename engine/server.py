@@ -13,6 +13,7 @@ Start with:
 """
 
 import asyncio
+import json as json_mod
 import os
 import sys
 import tempfile
@@ -20,7 +21,7 @@ from contextlib import asynccontextmanager
 from typing import Optional
 
 from fastapi import FastAPI, File, Form, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 # Allow running as: python -m uvicorn engine.server:app from project root
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -123,3 +124,93 @@ async def transcribe(
         # "finally" runs whether or not an exception occurred.
         if os.path.exists(tmp_path):
             os.unlink(tmp_path)
+
+
+@app.post("/transcribe-chunk")
+async def transcribe_chunk(
+    audio: UploadFile   = File(...),
+    prior_context: str  = Form(""),
+):
+    """
+    Fast transcription for streaming dictation.
+
+    Optimized for short VAD-detected speech chunks (2-8 seconds).
+    Uses beam_size=1 and skips server-side VAD for minimal latency.
+    prior_context carries the last ~200 chars of accumulated text
+    so Whisper maintains vocabulary and language consistency.
+    """
+    original_name = audio.filename or "recording.wav"
+    ext = "." + original_name.rsplit(".", 1)[-1] if "." in original_name else ".wav"
+    audio_bytes = await audio.read()
+
+    with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+        tmp.write(audio_bytes)
+        tmp_path = tmp.name
+
+    try:
+        loop   = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None,
+            lambda: engine.transcribe_chunk(tmp_path, prior_context),
+        )
+        return JSONResponse(result)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+
+@app.post("/transcribe/stream")
+async def transcribe_stream(
+    audio: UploadFile = File(...),
+    timestamps: str   = Form("false"),
+    language: str     = Form(""),
+):
+    """
+    Streaming transcription endpoint — returns Server-Sent Events (SSE).
+
+    Each segment yields a progress event so the GUI can show a real-time
+    progress bar. The final event contains the complete transcription.
+
+    SSE format: each line is  data: {JSON}\n\n
+    """
+    use_timestamps = timestamps.lower() == "true"
+    lang           = language.strip() or None
+
+    original_name = audio.filename or "recording.wav"
+    ext = "." + original_name.rsplit(".", 1)[-1] if "." in original_name else ".wav"
+    audio_bytes = await audio.read()
+
+    with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+        tmp.write(audio_bytes)
+        tmp_path = tmp.name
+
+    async def event_generator():
+        try:
+            loop = asyncio.get_event_loop()
+            q: asyncio.Queue = asyncio.Queue()
+
+            def _run():
+                try:
+                    for event in engine.transcribe_streaming(tmp_path, use_timestamps, lang):
+                        asyncio.run_coroutine_threadsafe(q.put(event), loop)
+                except Exception as e:
+                    asyncio.run_coroutine_threadsafe(
+                        q.put({"type": "error", "error": str(e)}), loop
+                    )
+                finally:
+                    asyncio.run_coroutine_threadsafe(q.put(None), loop)
+
+            loop.run_in_executor(None, _run)
+
+            while True:
+                event = await q.get()
+                if event is None:
+                    break
+                yield f"data: {json_mod.dumps(event)}\n\n"
+        finally:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")

@@ -6,3 +6,4 @@ soundfile
 numpy
 requests
 pyperclip
+webrtcvad-wheels
